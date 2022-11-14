@@ -57,6 +57,7 @@ class RedisQueueWorker:
         log_queue: Optional[str] = None,
         predict_timeout: Optional[int] = None,
         redis_db: int = 0,
+        max_failure_count: int = None,
     ):
         self.worker = Worker(predictor_ref)
         self.redis_host = redis_host
@@ -68,6 +69,7 @@ class RedisQueueWorker:
         self.log_queue = log_queue
         self.predict_timeout = predict_timeout
         self.redis_db = redis_db
+        self.max_failure_count = max_failure_count
         if self.predict_timeout is not None:
             # 30s grace period allows final responses to be sent and job to be acked
             self.autoclaim_messages_after = self.predict_timeout + 30
@@ -148,6 +150,8 @@ class RedisQueueWorker:
             )
             sys.stderr.write(f"Setup time: {setup_time:.2f}\n")
 
+        failure_count = 0
+
         sys.stderr.write(f"Waiting for message on {self.input_queue}\n")
         while not self.should_exit:
             try:
@@ -191,6 +195,17 @@ class RedisQueueWorker:
 
                     for response in self.run_prediction(message, should_cancel):
                         send_response(response)
+
+                    if self.max_failure_count is not None:
+                        # Keep track of runs of failures to catch the situation
+                        # where the worker has gotten into a bad state where it can
+                        # only fail predictions, but isn't exiting.
+                        if response["status"] == Status.FAILED:
+                            failure_count += 1
+                            if failure_count > self.max_failure_count:
+                                self.should_exit = True
+                        else:
+                            failure_count = 0
 
                     self.redis.xack(self.input_queue, self.input_queue, message_id)
                     self.redis.xdel(self.input_queue, message_id)
@@ -446,6 +461,11 @@ if __name__ == "__main__":
     parser.add_argument("--consumer-id")
     parser.add_argument("--model-id")
     parser.add_argument("--predict-timeout", type=int)
+    parser.add_argument(
+        "--max-failure-count",
+        type=int,
+        help="Maximum number of consecutive failures before the worker should exit",
+    )
 
     args = parser.parse_args()
 
@@ -464,6 +484,7 @@ if __name__ == "__main__":
             consumer_id=args.consumer_id,
             model_id=args.model_id,
             predict_timeout=args.predict_timeout,
+            max_failure_count=args.max_failure_count,
         )
 
     worker.start()
