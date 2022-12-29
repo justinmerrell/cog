@@ -17,7 +17,7 @@ from .errors import ConfigDoesNotExist, PredictorNotSet
 from .types import Input, Path as CogPath, File as CogFile
 
 
-ALLOWED_INPUT_TYPES = [str, int, float, bool, CogFile, CogPath]
+ALLOWED_INPUT_TYPES = [list, str, int, float, bool, CogFile, CogPath]
 
 
 class BasePredictor(ABC):
